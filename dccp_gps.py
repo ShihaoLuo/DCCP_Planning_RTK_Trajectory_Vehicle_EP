@@ -4,7 +4,6 @@ Created on Sun Mar 14 15:52:21 2021
 
 @author: 13738
 """
-
 import cvxpy as cp
 import time
 import math
@@ -26,7 +25,28 @@ import sys
 #from mpl_toolkits.mplot3d import Axes3D
 
 pose_queue = mp.Queue()
+#parameters
+listx = np.array([0.3,0.5,0.6])#x for the barriers
+listy = np.array([0.3,0.5,0.7])#y for the barriers
+r = np.array([0.1,0.2,0.1])# radius for barriers
+startpoint = np.array([0,0])
+endpoint = np.array([1.2,1.2])
+#Parameters for the mpc control
+Ts = 0.5 #sampletime
+DesireSpeed = 0.3#m/s
+initpose = np.array([77.6, 50.8])
+pose = np.array([0,0,0])
+umax = np.array([0.5,0.5,0.5])# ([maxspeed for x, for y , for w])
+umin = np.array([-0.5,-0.5,-0.5])# ([maxspeed for x, for y , for w])
+dumax = np.array([0.2,0.2,0.2])# the  accelerations of vx,vy,w
+dumin = np.array([-0.2,-0.2,-0.2])
+N = 5 # Prediction horizon
+resolution = 0.5# the distance of equdistpoint.
 
+# weighting matrix function
+Q = sparse.diags([1.,1.,1.])
+QN = Q *10
+R = 0.1*sparse.eye(3)
 
 def get_pose(port, pose):
     print("get pose thread start.")
@@ -37,7 +57,6 @@ def get_pose(port, pose):
         arr_x = np.array([])
         arr_y = np.array([])
         wgs84 = pyproj.CRS("EPSG:4326")
-        # UTM50N = pyproj.CRS("EPSG:32650")
         UTM50N = pyproj.CRS(proj='utm', zone=50,ellps='WGS84', units='m',vunits='m', datum='WGS84',\
                        lat_0=22.4, lon_0=114.1)
         print(UTM50N.to_string)
@@ -83,29 +102,6 @@ def get_pose(port, pose):
         print("ser creating error.")
 
 
-#parameters
-listx = np.array([0.3,0.5,0.6])#x for the barriers
-listy = np.array([0.3,0.5,0.7])#y for the barriers
-r = np.array([0.1,0.2,0.1])# radius for barriers
-startpoint = np.array([0,0])
-endpoint = np.array([1.2,1.2])
-#Parameters for the mpc control
-Ts = 0.5 #sampletime
-DesireSpeed = 0.3#m/s
-initpose = np.array([77.6, 50.8])
-pose = np.array([0,0,0])
-umax = np.array([0.5,0.5,0.5])# ([maxspeed for x, for y , for w])
-umin = np.array([-0.5,-0.5,-0.5])# ([maxspeed for x, for y , for w])
-dumax = np.array([0.2,0.2,0.2])# the  accelerations of vx,vy,w
-dumin = np.array([-0.2,-0.2,-0.2])
-N = 5 # Prediction horizon
-resolution = 0.5# the distance of equdistpoint.
-
-# weighting matrix function
-Q = sparse.diags([1.,1.,1.])
-QN = Q *10
-R = 0.1*sparse.eye(3)
-
 def DCCP_planning(listx, listy, r, startpoint, end_point):
     time_start=time.time()
     #l = 10
@@ -145,124 +141,21 @@ def DCCP_planning(listx, listy, r, startpoint, end_point):
     return(dccp_path)
 
 
-#the dynamic 
-def cal_M(theta,Ts):
-    M = np.zeros((3,3))
-    M[0,0] = np.cos(theta)*Ts
-    M[0,1] = np.sin(theta)*(-1)*Ts
-    M[1,0] = np.sin(theta)*Ts*(-1)
-    M[1,1] = np.cos(theta)*Ts*(-1)
-    M[2,2] = 1*Ts
-    return M
-
-# Define problem
-u = cp.Variable((3, N))
-x = cp.Variable((3, N+1))
-x_init = cp.Parameter(3)
-M = cp.Parameter((3,3))
-xr = cp.Parameter((3,N+1))
-objective = 0
-constraints = [x[:,0] == x_init]
-for k in range(N):
-    Q = Q  * N *0.5
-    objective += cp.quad_form(x[:,k] - xr[:,k], Q) + cp.quad_form(u[:,k], R)
-    constraints += [x[:,k+1] == x[:,k] + np.dot(M,u[:,k])]
-    constraints += [umin <= u[:,k], u[:,k] <= umax]
-    if k >0:
-        constraints += [dumin*Ts <= u[:,k]-u[:,k-1], u[:,k]-u[:,k-1] <= dumax*Ts]
-objective += cp.quad_form(x[:,N] - xr[:,N], QN)
-prob = cp.Problem(cp.Minimize(objective), constraints)
-
-# 测试环境：Python 3.6 版本
-
 def command(s,msg):
     msg +=';'
     print ('send -> ', msg)
     s.send(msg.encode('utf-8'))
     try:
-            # 等待机器人返回执行结果
         buf = s.recv(1024)
         print(buf.decode('utf-8'))
     except socket.error as e:
         print("Error receiving :", e)
         sys.exit(1)
-            
-#connect to the S1
-
-
-# def sendcommand(s,command1):
-#     spell = 'chassis speed x '+ str(command1[0])+' y '+str(command1[1])+' z '+str(command1[2])
-#     print(spell)
-#     command(s,spell)
 
 def sendcommand(s, command1):
     spell = 'chassis move x ' + str(command1[0]) + ' y ' + str(command1[1])
     print(spell)
     command(s,spell)
-    
-
-
-# def run(s, pose_queue, ref):
-#     # Simulate in closed loop
-#     last_ref = ref[:,-1]
-#     for i in range(N-1):
-#         last_ref = np.append(last_ref,ref[:,-1])
-#     last_ref = last_ref.reshape((N,3)).T
-#     fianlusingref = np.append(ref,last_ref,axis=1)
-#     nsim = len(ref[0,:])
-#     path = np.array([])
-#     com = np.array([])
-#     pose = initpose
-#     path =np.append(path,pose)
-#     now = time.time()
-#     for i in range(nsim):
-#         start_time = time.time()
-#         x_init.value = pose
-#         #print(x0)
-#         #print(u.value)
-#         M.value = cal_M(pose[2],Ts)
-#         xr.value = fianlusingref[:,i:i+N+1]
-#         print("target:", xr.value[:,-1])
-#         #print(M.value)
-#         prob.solve(solver=cp.OSQP, warm_start=True)
-#         #print(prob.is_dcp())
-#         #print(dccp.is_dccp(prob))
-#         #prob.solve(method="dccp")
-#         pose = pose + np.dot(M.value ,(u[:,0].value))
-#         print('estimated pose:',pose)
-#         if time.time() - now > 5:
-#             sendcommand(s, np.zeros(3))
-#             time.sleep(2)
-#             if pose_queue.empty() is False:
-#                 x = pose_queue.get()
-#                 y = pose_queue.get()
-#                 print("gps pose:",x,y)
-#                 pose[0] = x
-#                 pose[1] = y
-#             else:
-#                 print('pose is empty.')
-#             now = time.time()
-#         #print(u.value)
-#         #print(x0)
-#         path = np.append(path,pose)
-#         com = np.append(com,u[:,0].value)
-#         end_time = time.time()
-#         run_time = end_time - start_time
-#         #print(end_time-start_time)
-#         wait_t = Ts-(end_time-start_time)
-#         if wait_t >= 0:
-#             time.sleep(wait_t)
-#         else:
-#              print(wait_t)
-#         command1 = u[:,0].value
-#         sendcommand(s,command1)
-#     time.sleep(Ts)
-#     sendcommand(s,np.zeros(3))
-#     command(s,'chassis move x 0 y 0 z 0')
-#     com = com.reshape((nsim,3)).T
-#     path = path.reshape((nsim+1,3)).T
-#     s.shutdown(socket.SHUT_WR)
-#     s.close()
 
 def run(s, pose_queue, ref):
     now = time.time()
@@ -334,11 +227,7 @@ def main():
     tVec = np.linspace(0, len(equdist_waypoint[0, :]),
                        num=int(len(equdist_waypoint[0, :]) * (resolution / (DesireSpeed * Ts))))
     f = interpolate.interp1d(tVec2, equdist_waypoint, kind='cubic')
-    # ref = f(tVec)
     ref = equdist_waypoint
-    print(equdist_waypoint)
-    # print("path:", ref)
-
     # 组网模式下，机器人当前 IP 地址为 192.168.0.115, 控制命令端口号为 40923
     # 机器人 IP 地址根据实际 IP 进行修改
     # host = "192.168.50.76"
@@ -346,10 +235,8 @@ def main():
     host = '192.168.2.1'# 直连模式
     port = 40923
     address = (host, int(port))
-    
     # 与机器人控制命令端口建立 TCP 连接
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    
     print("Connecting...")
     s.setblocking(True)
     s.connect(address)
@@ -361,7 +248,6 @@ def main():
         if pose_queue.empty() is False:
             break
     run(s, pose_queue, ref)
-    
-    
+
 if __name__ == '__main__':
     main()
